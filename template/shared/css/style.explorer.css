@@ -1,0 +1,61 @@
+/* CSS file */
+.canvas
+{
+	backgroundColor:#F7F7F7;
+}
+.panelFrames
+{
+	fontFamily:Tahoma;
+	fontSize:11px;
+	color:#000000;
+	borderColor:#A6C9DD;
+	borderThicknessBottom:2px;
+	borderThicknessLeft:2px;
+	borderThicknessRight:2px;
+	borderThicknessTop:0px;
+}
+.menuBar
+{
+	borderColor:#A6C9DD;
+	fontFamily:Tahoma;
+	fontSize:11px;
+	color:#3B5998;
+	fillColors:#FFFFFF,#A6C9DD;
+	fontWeight:bold;
+	themeColor:#A6C9DD;
+	disabledColor:#B9B9B9;
+}
+.directoryTree
+{
+	fontFamily:Tahoma;
+	fontSize:11px;
+	color:#000000;
+	borderColor:#D6EDFA;
+	textSelectedColor:#000000;
+	textRollOverColor:#000000;
+	selectionColor:#A6C9DD;
+}
+.contentGrid
+{
+	fontFamily:Tahoma;
+	fontSize:11px;
+	color:#000000;
+	alternatingItemColors:#F7F7F7,#FEFEFE;
+	borderColor:#D6EDFA;
+	textSelectedColor:#000000;
+	textRollOverColor:#000000;
+	selectionColor:#A6C9DD;
+}
+.detailsLabel
+{
+	fontFamily:Tahoma;
+	fontSize:11px;
+	fontWeight:bold;
+	color:#000000;
+}
+.detailsText
+{
+	fontFamily:Tahoma;
+	fontSize:11px;
+	color:#000000;
+}

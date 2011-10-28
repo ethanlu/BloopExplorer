@@ -1,0 +1,857 @@
+<?xml version="1.0" encoding="utf-8"?>
+<mx:Application xmlns:mx="http://www.adobe.com/2006/mxml"
+				xmlns:mb="bloopComponents.*"
+				layout="absolute"
+				width="960"
+				height="600"
+				creationComplete="run();">
+  <mx:Style source="/template/shared/css/style.explorer.css" />
+  <mx:Script>
+    <![CDATA[
+      import com.adobe.serialization.json.JSON;
+      import flash.external.ExternalInterface;
+      import flash.net.navigateToURL;
+      import flash.net.FileReference;
+      import mx.collections.XMLListCollection;
+      import mx.containers.Box;
+      import mx.containers.TitleWindow;
+      import mx.core.Application;
+      import mx.managers.CursorManager;
+      import mx.managers.PopUpManager;
+      import mx.rpc.events.*;
+      import mx.events.*;
+      import mx.controls.Alert;
+      import bloopComponents.createItem;
+      import bloopComponents.renameItem;
+      import bloopComponents.processingRequest;
+      
+      [Bindable] private var _contextMenu:ContextMenu;
+      [Bindable] private var _menuBarCollection:XMLListCollection;
+      [Bindable] private var _headerImagePath:String;
+      private var _siteURL:String = "";
+      private var _userID:Number = 0;
+      private var _userName:String = 'Anonymous';
+      private var _menuBarXML:XMLList;
+      private var _processingWindow:processingRequest = null;
+      private var _loggedIn:Boolean = false;
+      private var _oFileRequest:FileReference = null;
+      
+      //-command types
+      private var _CMD_CREATE_FOLDER:String = "CREATE_FOLDER";
+      private var _CMD_CREATE_PLAYLIST:String = "CREATE_PLAYLIST";
+      private var _CMD_RENAME_FOLDER:String = "RENAME_FOLDER";
+      private var _CMD_RENAME_FILE:String = "RENAME_FILE";
+      private var _CMD_MOVE:String = "MOVE";
+      private var _CMD_ADD_TO_PLAYLIST:String = "ADD_TO_PLAYLIST";
+      private var _CMD_HIDE:String = "HIDE";
+      private var _CMD_UNHIDE:String = "UNHIDE";
+      private var _CMD_DELETE:String = "DELETE";
+      private var _CMD_COPY_TO_ACCOUNT:String = "COPY_TO_ACCOUNT";
+      
+      ///////////////////////////////////////////////////////////////////////////////////////////
+      ///////////////////////////////////////////////////////////////////////////////////////////
+      //-private functions
+      
+      private function _back():void
+      {
+        var currentDirectory:XML = this.cmpBloopExplorerTree.getSelectedDirectory();
+        
+        if (currentDirectory.@id > 0)
+        {
+          this.cmpBloopExplorerTree.setSelectedDirectory(currentDirectory.parent());
+          this._treeDirectorySelected();
+        }
+      }
+      
+      private function _toggleDetailView():void
+      {
+        if (this.currentState == 'Details')
+          this.currentState = '';
+        else
+        {
+          this.currentState = 'Details';
+          this.cmpBloopExplorerDetails.initializeDetails(this._userID,this._siteURL + 'ajax/flex/getDetails_flex.o');
+          this._rowSelected();
+        }
+      }
+      
+      ///////////////////////////////////////
+      ///////////////////////////////////////
+      //-compontent event handlers
+      private function _treeDirectorySelected():void
+      {
+        var directoryID:int = this.cmpBloopExplorerTree.getSelectedDirectory().@id;
+        
+        //-update path in content panel
+        var path:Array = this.cmpBloopExplorerTree.getPath(directoryID,false);
+        this.pnlContent.title = '/' + path.join('/');
+        
+        //-load content panel with new content
+        this.cmpBloopExplorerContent.loadContents(directoryID);
+      }
+      
+      private function _rowSelected():void
+      {
+        if (this.currentState == 'Details')
+        {
+          var selectedRow:Object = this.cmpBloopExplorerContent.getSelectedRow();
+          
+          if (selectedRow)
+          {
+            this.pnlDetails.title = selectedRow.name;
+            
+            if (selectedRow.isFolder)
+              this.cmpBloopExplorerDetails.getDirectoryDetails(selectedRow.did);
+            else
+              this.cmpBloopExplorerDetails.getfileDetails(selectedRow.fid);
+          }
+        }
+      }
+      
+      private function _contentDirectoryLaunched():void
+      {
+        var directoryID:int = this.cmpBloopExplorerContent.getSelectedRow().did;
+        var path:Array = this.cmpBloopExplorerTree.getPath(directoryID,true);
+        
+        this.cmpBloopExplorerContent.loadContents(directoryID);
+        this.cmpBloopExplorerTree.expandToDirectory(directoryID);
+        this.cmpBloopExplorerTree.setSelectedDirectory(this.cmpBloopExplorerTree.getDirectoryByID(directoryID));
+        this._treeDirectorySelected();
+      }
+      
+      private function _fileLaunched():void
+      {
+        var selectedFile:Object = this.cmpBloopExplorerContent.getSelectedRow();
+        
+        this._callJavascriptFunction('window.open',this._siteURL + 'go/' + selectedFile.urlHash);
+      }
+      
+      private function _reloadComplete():void
+      {
+        if (this._processingWindow)
+        {
+	      	PopUpManager.removePopUp(this._processingWindow);
+	      	this._processingWindow = null;
+        }
+        
+        this._treeDirectorySelected();
+      }
+      
+      ///////////////////////////////////////
+      ///////////////////////////////////////
+      //-local event handlers
+      
+      private function _renameItemClicked(e:ContextMenuEvent):void
+      {
+      	this._showRenameItemWindow();
+      }
+      
+      private function _renameWindowClosed(e:Event):void
+      {
+      	this._renameItem(this.newNameHolder.text);
+      }
+      
+      private function _createWindowClosed(e:Event):void
+      {
+      	if (this.newItemTypeHolder.text == 'folder')
+      		this._createFolder(this.newNameHolder.text);
+      	else if (this.newItemTypeHolder.text == 'playlist')
+      		this._createPlaylist(this.newNameHolder.text);      	
+      }
+      
+      private function _copyLinkClicked(e:ContextMenuEvent):void
+      {
+        var targetRow:Object = this.cmpBloopExplorerContent.getMousedOverRow();
+        
+        if (targetRow.isFolder)
+        {
+          var aDirectoryPath:Array = this.cmpBloopExplorerTree.getPath(targetRow.did);
+          aDirectoryPath.shift();
+          System.setClipboard(this._siteURL + this._userName + '/'+ aDirectoryPath.join('/').replace(/ /g,'_'));
+        }
+        else
+        {
+          System.setClipboard(this._siteURL + 'go/' + targetRow.urlHash);
+        }
+      }
+      
+      private function _downloadClicked(e:ContextMenuEvent):void
+      {
+        var targetRow:Object = this.cmpBloopExplorerContent.getMousedOverRow();
+        
+        if (!targetRow.isFolder)
+        {
+          var oFileURLRequest:URLRequest = new URLRequest(this._siteURL + 'get/' + targetRow.fid + '/' + targetRow.name.replace(/ /g,'_'));
+          this._oFileRequest.download(oFileURLRequest);
+        }
+      }
+      
+      private function _downloadRequestHandler(e:Event):void
+      {
+        switch (e.type)
+        {
+          case IOErrorEvent.IO_ERROR:
+          case SecurityErrorEvent.SECURITY_ERROR:
+            Alert.show('There was an error while processing your download.');
+            break;
+          case Event.CANCEL:
+          case Event.COMPLETE:
+          case Event.OPEN:
+          case Event.SELECT:
+          case HTTPStatusEvent.HTTP_STATUS:
+          case ProgressEvent.PROGRESS:
+          default:
+            //-do nothing for these events
+            break;
+        }
+      }
+      
+      private function _copyToAccountClicked(e:ContextMenuEvent):void
+      {
+        this._copyToAccount();
+      }
+      
+      private function _launchBloopPlayerClicked(e:ContextMenuEvent):void
+      {
+        var targetItem:Object = this.cmpBloopExplorerContent.getMousedOverRow();
+        
+        this._callJavascriptFunction('showPlayerV2File',String(targetItem.urlHash));
+      }
+      
+      private function _launchPlaylistManagerClicked(e:ContextMenuEvent):void
+      {
+        var targetItem:Object = this.cmpBloopExplorerContent.getSelectedRow();
+        
+        this._callJavascriptFunction('window.open',this._siteURL + 'members/playlist.o?id=' + targetItem.fid);
+      }
+      
+      private function _confirmDelete(e:ContextMenuEvent):void
+      {
+      	Alert.show('You are about to delete files/folders. Proceed?','Delete',3,this,_deleteItems);
+      }
+      
+      private function _hideClicked(e:ContextMenuEvent):void
+      {
+        this._hideItems();
+      }
+      
+      private function _unhideClicked(e:ContextMenuEvent):void
+      {
+        this._unhideItems();
+      } 
+      
+      private function _contextMenuOpen(e:ContextMenuEvent):void
+      {
+      	var enableRename:Boolean = false;
+        var enableCopyLink:Boolean = false;
+        var enableLaunchPlayer:Boolean = false;
+        var enableDelete:Boolean = false;
+        var enableHide:Boolean = false;
+        var enableUnhide:Boolean = false;
+        var enableManagePlaylist:Boolean = false;
+        var enableCopyToAccount:Boolean = false;
+        var enableDownload:Boolean = false;
+        
+        if (e.mouseTarget.parent.parent == this.cmpBloopExplorerContent.contentGrid)	//-right click was done over content grid
+        {
+          //-when context menu is open, itemrollover event can still be triggered...so lock the highlight change value
+          this.cmpBloopExplorerContent.setHighlightChangeLock(true);
+          var targetItem:Object = this.cmpBloopExplorerContent.getMousedOverRow();
+          
+          this.cmpBloopExplorerContent.contentGrid.selectedIndex = this.cmpBloopExplorerContent.getIndexByRow(targetItem);
+          this._rowSelected();
+          
+          var selectedItem:Object = this.cmpBloopExplorerContent.getSelectedRow();
+          
+          var bMultiSelect:Boolean = (this.cmpBloopExplorerContent.contentGrid.selectedIndices.length > 1);
+          
+          if ((!bMultiSelect) && (selectedItem))
+          	enableRename = true;
+          	
+          enableDelete = true;
+          enableHide = true;
+          enableUnhide = true;
+          enableCopyLink = !bMultiSelect;      //-row can have copy link if only one row is highligted
+          
+          //-file types
+          if ((targetItem) && (!targetItem.isFolder))
+          {
+            enableCopyToAccount = this._loggedIn; //-file types can have copy to account
+            enableDownload = !bMultiSelect;
+            
+            //-playlists and music types can have bloop player enabled
+            if ((!bMultiSelect) && ((targetItem.type == 'mp3') || (targetItem.type == 'blp')))
+            {
+                enableLaunchPlayer = true;
+            }
+            
+            //-playlists can have manage link enabled
+            if ((!bMultiSelect) && (targetItem.type == 'blp'))
+            {
+            	enableManagePlaylist = true;
+            }
+          }
+        }
+        
+        if (Application.application.parameters.useAdmin)
+        {
+          this._contextMenu.customItems[0].enabled = enableDownload;
+	        this._contextMenu.customItems[1].enabled = enableRename;
+	        this._contextMenu.customItems[2].enabled = enableCopyLink;
+	        this._contextMenu.customItems[3].enabled = enableLaunchPlayer;
+	        this._contextMenu.customItems[4].enabled = enableDelete;
+	        this._contextMenu.customItems[5].enabled = enableHide;
+	        this._contextMenu.customItems[6].enabled = enableUnhide;
+	        this._contextMenu.customItems[7].enabled = enableManagePlaylist;
+        }
+        else
+        {
+	        this._contextMenu.customItems[0].enabled = enableCopyLink;
+	        this._contextMenu.customItems[1].enabled = enableLaunchPlayer;
+	        this._contextMenu.customItems[2].enabled = enableCopyToAccount;
+        }
+      }
+      
+      private function _menuBarClick(e:MenuEvent):void
+      {
+        var selectedOption:String = String(e.item.@data);
+        switch (selectedOption)
+        {
+          case 'Folder':
+            this._showCreateItemWindow('folder');
+            break;
+          case 'Playlist':
+            this._showCreateItemWindow('playlist');
+            break;
+          case 'Rename':
+          	this._showRenameItemWindow();
+          	break;
+          case 'Hide':
+            this._hideItems();
+            break;
+          case 'Unhide':
+            this._unhideItems();
+            break;
+          case 'Delete':
+            this._confirmDelete(null);
+            break;
+          case 'Back':
+            this._back();
+            break;
+          case 'Details':
+            this._toggleDetailView();
+            break;
+          default:
+            break;
+        }
+      }
+      
+      //////////////////////////////////
+      //////////////////////////////////
+      //-administrative event handlers
+      
+      private function _sendCommand(operation:String,parameters:Object):void
+      {
+    		this._processingWindow = processingRequest(PopUpManager.createPopUp(this,processingRequest,true));
+    		PopUpManager.centerPopUp(this._processingWindow);
+    				
+    		this._processingWindow.title = "Processing request";
+      	
+        this.adminRequest.url = this._siteURL + 'members/ajax/flex/executeCommand.o';
+        
+        parameters.c = operation;
+        this.adminRequest.send(parameters);
+      }
+      
+      private function _loadResponse(e:ResultEvent):void
+      {
+        var rawData:String = String(e.result);
+        var data:Object = JSON.decode(rawData);
+        
+        if (data.status >= 0)
+        {
+        	this.refresh();
+        	
+        	if (data.status > 0)
+        		Alert.show(data.message);
+        }
+        else
+        {
+        	this._reloadComplete();
+        	Alert.show(data.message);
+        }
+      }
+      
+      private function _handleError(e:FaultEvent):void
+      {
+      	PopUpManager.removePopUp(this._processingWindow);
+      	
+      	Alert.show(e.fault.message, "Error communicating with server. Please try again later...");
+      }
+      
+      //////////////////////////////
+      //////////////////////////////
+      //-administrative functions
+      
+      private function _showRenameItemWindow():void
+      {
+      	var selectedItem:Object = this.cmpBloopExplorerContent.getSelectedRow();
+      	
+      	if (selectedItem)
+      	{
+					var renameWindow:renameItem = renameItem(PopUpManager.createPopUp(this,renameItem,true));
+					PopUpManager.centerPopUp(renameWindow);
+					
+					renameWindow.item = selectedItem;
+					this.newNameHolder.text = "";
+					renameWindow.newName = this.newNameHolder;
+					
+					renameWindow.addEventListener("newNameEntered",_renameWindowClosed);
+      	}
+      }
+      
+      private function _showCreateItemWindow(type:String):void
+      {
+				var createWindow:createItem = createItem(PopUpManager.createPopUp(this,createItem,true));
+				PopUpManager.centerPopUp(createWindow);
+				
+				createWindow.title = "Create new " + type;
+				this.newItemTypeHolder.text = type;
+				this.newNameHolder.text = "";
+				createWindow.newName = this.newNameHolder;
+				
+				createWindow.addEventListener("newNameEntered",_createWindowClosed);
+      }
+      
+      private function _createFolder(name:String):void
+      {
+        //Alert.show('creating new folder : ' + name);
+        var selectedDirectory:XML = this.cmpBloopExplorerTree.getSelectedDirectory();
+        
+        this._sendCommand(this._CMD_CREATE_FOLDER,{p:selectedDirectory.@id,t:name});
+      }
+      
+      private function _createPlaylist(name:String):void
+      {
+        //Alert.show('creating new playlist : ' + name);
+        var selectedDirectory:XML = this.cmpBloopExplorerTree.getSelectedDirectory();
+        
+        this._sendCommand(this._CMD_CREATE_PLAYLIST,{p:selectedDirectory.@id,t:name});
+      }
+      
+      private function _renameItem(newName:String):void
+      {
+      	var selectedItem:Object = this.cmpBloopExplorerContent.getSelectedRow();
+      	//Alert.show('new name is ' + newName);
+      	
+      	if (selectedItem.isFolder)
+    			this._sendCommand(this._CMD_RENAME_FOLDER,{ds:selectedItem.did,t:newName});
+    		else
+    			this._sendCommand(this._CMD_RENAME_FILE,{fs:selectedItem.fid,t:newName});
+      }
+      
+      private function _moveItems():void
+      {
+        var targetItem:Object = this.cmpBloopExplorerContent.getDroppedRow();
+        var targetRow:XML = this.cmpBloopExplorerTree.getDroppedDirectory();
+        
+        var names:Array = new Array();
+	    	var fileIDs:Array = new Array();				//-stores all files that have been moved
+	    	var directoryIDs:Array = new Array();		//-stores all directories that have been moved
+	    	
+	    	var selectedItems:Array = this.cmpBloopExplorerContent.contentGrid.selectedIndices;
+	    	
+	    	for (var i:int = 0; i < selectedItems.length; i++)
+	    	{
+	    	  var item:Object = this.cmpBloopExplorerContent.getRowByIndex(selectedItems[i]);
+	    	  
+	    	  if (item)
+	    	  {
+	    	    names.push(item.name);
+	    	    
+	    	    if (item.isFolder)
+	    	    	directoryIDs.push(item.did);
+	    	    else
+	    	    	fileIDs.push(item.fid);
+	    	  }
+        }
+        
+        fileIDs.reverse();
+        
+        if (targetItem)  //-was dropped into a content item (file or folder)
+        {
+        	//Alert.show('dropping ' + names.join(',').toString() + ' into ' + targetItem.name);
+        	
+        	if (targetItem.isFolder)
+        		this._sendCommand(this._CMD_MOVE,{p:targetItem.did,fs:fileIDs.join(','),ds:directoryIDs.join(',')});
+        	else
+        		this._sendCommand(this._CMD_ADD_TO_PLAYLIST,{pl:targetItem.fid,fs:fileIDs.join(','),ds:directoryIDs.join(',')});
+        }
+        else if (targetRow)  //-was dropped into a tree row (folder)
+        {
+        	//Alert.show('dropping ' + names.join(',').toString() + ' into ' + targetRow.@name);
+        	this._sendCommand(this._CMD_MOVE,{p:targetRow.@id,fs:fileIDs.join(','),ds:directoryIDs.join(',')});
+        }
+        else  //-unknown target (dropped onto some other area)
+        {
+        	//-do nothing
+        }
+      }
+      
+      private function _unhideItems():void
+      {
+        //-get selected items
+      	var selectedItems:Array = this.cmpBloopExplorerContent.contentGrid.selectedIndices;
+      	
+        var names:Array = new Array();
+	    	var fileIDs:Array = new Array();				//-stores all files that have been moved
+	    	var directoryIDs:Array = new Array();		//-stores all directories that have been moved
+	    	
+      	for (var i:int = 0; i < selectedItems.length; i++)
+      	{
+      	  var item:Object = this.cmpBloopExplorerContent.getRowByIndex(selectedItems[i]);
+      	  
+	    	  if (item)
+	    	  {
+	    	    names.push(item.name);
+	    	    
+	    	    if (item.isFolder)
+	    	    	directoryIDs.push(item.did);
+	    	    else
+	    	    	fileIDs.push(item.fid);
+	    	  }
+      	}
+      	
+      	//Alert.show('unhiding ' + names.join(','));
+      	this._sendCommand(this._CMD_UNHIDE,{fs:fileIDs.join(','),ds:directoryIDs.join(',')});
+      }
+      
+      private function _hideItems():void
+      {
+        //-get selected items
+      	var selectedItems:Array = this.cmpBloopExplorerContent.contentGrid.selectedIndices;
+      	
+        var names:Array = new Array();
+	    	var fileIDs:Array = new Array();				//-stores all files that have been moved
+	    	var directoryIDs:Array = new Array();		//-stores all directories that have been moved
+	    	
+      	for (var i:int = 0; i < selectedItems.length; i++)
+      	{
+      	  var item:Object = this.cmpBloopExplorerContent.getRowByIndex(selectedItems[i]);
+      	  
+	    	  if (item)
+	    	  {
+	    	    names.push(item.name);
+	    	    
+	    	    if (item.isFolder)
+	    	    	directoryIDs.push(item.did);
+	    	    else
+	    	    	fileIDs.push(item.fid);
+	    	  }
+      	}
+      	
+      	//Alert.show('hiding ' + names.join(','));
+      	this._sendCommand(this._CMD_HIDE,{fs:fileIDs.join(','),ds:directoryIDs.join(',')});
+      }
+      
+      private function _deleteItems(e:CloseEvent):void
+      {
+      	if (e.detail == Alert.YES)
+      	{
+	        //-get selected items
+	      	var selectedItems:Array = this.cmpBloopExplorerContent.contentGrid.selectedIndices;
+	      	
+	        var names:Array = new Array();
+		    	var fileIDs:Array = new Array();				//-stores all files that have been moved
+		    	var directoryIDs:Array = new Array();		//-stores all directories that have been moved
+		    	
+	      	for (var i:int = 0; i < selectedItems.length; i++)
+	      	{
+	      	  var item:Object = this.cmpBloopExplorerContent.getRowByIndex(selectedItems[i]);
+	      	  
+		    	  if (item)
+		    	  {
+		    	    names.push(item.name);
+		    	    
+		    	    if (item.isFolder)
+		    	    	directoryIDs.push(item.did);
+		    	    else
+		    	    	fileIDs.push(item.fid);
+		    	  }
+	      	}
+	      	
+	      	//Alert.show('deleting ' + names.join(','));
+	      	this._sendCommand(this._CMD_DELETE,{fs:fileIDs.join(','),ds:directoryIDs.join(',')});
+      	}
+      }
+      
+      private function _copyToAccount():void
+      {
+        //-get selected items
+        var selectedItems:Array = this.cmpBloopExplorerContent.contentGrid.selectedIndices;
+        
+        var names:Array = new Array();
+        var fileIDs:Array = new Array();        //-stores all files that have been moved
+        var directoryIDs:Array = new Array();   //-stores all directories that have been moved
+        
+        for (var i:int = 0; i < selectedItems.length; i++)
+        {
+          var item:Object = this.cmpBloopExplorerContent.getRowByIndex(selectedItems[i]);
+          
+          if (item)
+          {
+            names.push(item.name);
+            
+            if (item.isFolder)
+              directoryIDs.push(item.did);
+            else
+              fileIDs.push(item.fid);
+          }
+        }
+        
+        //Alert.show('hiding ' + names.join(','));
+        this._sendCommand(this._CMD_COPY_TO_ACCOUNT,{fs:fileIDs.join(',')});
+      }
+      
+      ///////////////////////////////////////
+      ///////////////////////////////////////
+      //-utility functions
+      
+      private function _callJavascriptFunction(functionName:String,URL:String):void
+      {
+        if (ExternalInterface.available)
+    		{
+    		  ExternalInterface.call(functionName,URL);
+    		}
+	    }
+      
+      ///////////////////////////////////////////////////////////////////////////////////////////
+      ///////////////////////////////////////////////////////////////////////////////////////////
+      //-public functions
+      
+      public function refresh():void
+      {
+      	var selectedDirectory:XML = this.cmpBloopExplorerTree.getSelectedDirectory();
+      	
+      	//-rebuild the directory tree
+      	this.cmpBloopExplorerTree.reloadTreePath();
+      	
+      	//-reload content window
+      	this.cmpBloopExplorerContent.loadContents(selectedDirectory.@id);
+      }
+      
+      public function run():void
+      {
+        this._userID = Application.application.parameters.userID;
+        this._userName = Application.application.parameters.userName;
+        this._siteURL = Application.application.parameters.domain + "/";
+        this._loggedIn = (Application.application.parameters.loggedIn == 1);
+        
+        var sDirectoryString:String = Application.application.parameters.autoLoad;
+        if (sDirectoryString == null)
+          sDirectoryString = '';
+        var aDirectoriesToLoad:Array = sDirectoryString.split(',');
+        
+        //this._siteURL = "http://ethanl.mybloop.com/";
+        
+        //-default to my account
+        if (this._userID.toString() == 'NaN')
+        {
+        	this._userID = 10692;
+        	this._userName = 'Nahte';
+        }
+        
+        this.pnlNavigation.title = this._userName + '\'s Files';
+        this.cmpBloopExplorerContent.initializeContent(this._userID,this._siteURL + 'ajax/flex/getContents_flex.o');
+        this.cmpBloopExplorerTree.initializeTree(this._userID,this._siteURL + 'ajax/flex/getDirectories_flex.o');
+        
+        //-make the home directory tree selected
+        if (aDirectoriesToLoad.length > 0)
+        {
+          this._processingWindow = processingRequest(PopUpManager.createPopUp(this,processingRequest,true));
+          PopUpManager.centerPopUp(this._processingWindow);
+              
+          this._processingWindow.title = "Loading to directory...";
+          
+          this.cmpBloopExplorerContent.loadContents(aDirectoriesToLoad[aDirectoriesToLoad.length-1]);
+          this.cmpBloopExplorerTree.loadPath(aDirectoriesToLoad);
+        }
+        else
+        {
+          this.cmpBloopExplorerTree.setSelectedDirectory(this.cmpBloopExplorerTree.getDirectoryByID(0));
+          this.cmpBloopExplorerTree.expandToDirectory(0);
+          this.cmpBloopExplorerContent.loadContents(0);
+        }
+        
+        switch (this.currentState)
+        {
+        	case 'Details':
+        		this.cmpBloopExplorerDetails.initializeDetails(this._userID,this._siteURL + 'ajax/flex/getDetails_flex.o');
+        		break;
+        	default:
+        		break;
+        }
+        
+        this.cmpBloopExplorerContent.contentGrid.allowMultipleSelection = true;
+        
+        Application.application.parameters.useAdmin = true;
+        
+        if (Application.application.parameters.useAdmin)
+        	this._headerImagePath = '/template/shared/images/my-files/header_enclosure_flex.jpg';
+        else
+        	this._headerImagePath = '/template/shared/images/explorer/1.0/explorer_header.jpg';
+        
+        if (Application.application.parameters.useAdmin)
+        {
+          //-initialize the file reference object
+          this._oFileRequest = new FileReference();
+          this._oFileRequest.addEventListener(Event.CANCEL,this._downloadRequestHandler);
+          this._oFileRequest.addEventListener(Event.COMPLETE,this._downloadRequestHandler);
+          this._oFileRequest.addEventListener(Event.OPEN,this._downloadRequestHandler);
+          this._oFileRequest.addEventListener(Event.SELECT,this._downloadRequestHandler);
+          this._oFileRequest.addEventListener(HTTPStatusEvent.HTTP_STATUS,this._downloadRequestHandler);
+          this._oFileRequest.addEventListener(ProgressEvent.PROGRESS,this._downloadRequestHandler);
+          this._oFileRequest.addEventListener(IOErrorEvent.IO_ERROR,this._downloadRequestHandler);
+          this._oFileRequest.addEventListener(SecurityErrorEvent.SECURITY_ERROR,this._downloadRequestHandler);
+          
+          //-enable drag drop for tree
+          this.cmpBloopExplorerTree.customDropEnabled = true;
+          
+          //-enable drag drop for content panel
+        	this.cmpBloopExplorerContent.contentGrid.dragEnabled = true;
+        	
+        	//-enable editing for content panel
+        	//this.cmpBloopExplorerContent.customEditEnabled = true;
+        	//this.cmpBloopExplorerContent.contentGrid.editable = true;
+        	
+        	this._menuBarXML = 
+        	  <>
+        	    <menuitem label="New">
+        	      <menuitem label="Folder" data="Folder"/>
+        	      <menuitem label="Playlist" data="Playlist"/>
+        	    </menuitem>
+        	    <menuitem label="Edit">
+        	      <menuitem label="Rename Selected" data="Rename"/>
+        	      <menuitem type="separator"/>
+        	      <menuitem label="Hide Selected" data="Hide"/>
+        	      <menuitem label="Unhide Selected" data="Unhide"/>
+        	      <menuitem type="separator"/>
+        	      <menuitem label="Delete Selected" data="Delete"/>
+        	    </menuitem>
+        	    <menuitem label="View">
+          	    <menuitem label="Up One Level" data="Back"/>
+          	    <menuitem type="check" label="Details" data="Details"/>
+        	    </menuitem>
+        	  </>;
+        }
+        else
+        {
+        	this._menuBarXML = 
+        	  <>
+        	    <menuitem label="View">
+          	    <menuitem label="Up One Level" data="Back"/>
+          	    <menuitem type="check" label="Details" data="Details"/>
+        	    </menuitem>
+        	  </>;
+        }
+        
+        //-create menubuttons
+        this._menuBarCollection = new XMLListCollection(this._menuBarXML);
+        
+        /////////////////////////////////////////////////////////////
+        /////////////////////////////////////////////////////////////
+        //-context menu initialiation
+        
+        if (Application.application.parameters.useAdmin)
+        {
+	        //-clear out context menu, and add additional functionaliity
+	        var renameItem:ContextMenuItem = new ContextMenuItem("Rename",true,true,true);
+	        renameItem.addEventListener(ContextMenuEvent.MENU_ITEM_SELECT,_renameItemClicked);
+	        var copyLinkItem:ContextMenuItem = new ContextMenuItem("Copy link to clipboard",true,true,true);
+	        copyLinkItem.addEventListener(ContextMenuEvent.MENU_ITEM_SELECT,_copyLinkClicked);
+	        
+	        var launchPlayerItem:ContextMenuItem = new ContextMenuItem("Launch file in Bloop Player",false,true,true);
+	        launchPlayerItem.addEventListener(ContextMenuEvent.MENU_ITEM_SELECT,_launchBloopPlayerClicked);
+	        var deleteItem:ContextMenuItem = new ContextMenuItem("Delete selected",true,true,true);
+	        deleteItem.addEventListener(ContextMenuEvent.MENU_ITEM_SELECT,_confirmDelete);
+	        var hideItem:ContextMenuItem = new ContextMenuItem("Hide selected",true,true,true);
+	        hideItem.addEventListener(ContextMenuEvent.MENU_ITEM_SELECT,_hideClicked);
+	        var unhideItem:ContextMenuItem = new ContextMenuItem("Unhide selected",false,true,true);
+	        unhideItem.addEventListener(ContextMenuEvent.MENU_ITEM_SELECT,_unhideClicked);
+	        var managePlaylist:ContextMenuItem = new ContextMenuItem("Manage playlist",true,true,true);
+	        managePlaylist.addEventListener(ContextMenuEvent.MENU_ITEM_SELECT,_launchPlaylistManagerClicked);
+	        
+	        var downloadItem:ContextMenuItem = new ContextMenuItem("Download",true,true,true);
+	        downloadItem.addEventListener(ContextMenuEvent.MENU_ITEM_SELECT,_downloadClicked);
+	
+	        this._contextMenu = new ContextMenu();
+	        this._contextMenu.hideBuiltInItems();
+	        this._contextMenu.customItems = [downloadItem,renameItem,copyLinkItem,launchPlayerItem,deleteItem,hideItem,unhideItem,managePlaylist];
+	        this.cmpBloopExplorerContent.contentGrid.contextMenu = this._contextMenu;
+	        this._contextMenu.addEventListener(ContextMenuEvent.MENU_SELECT,_contextMenuOpen);
+        }
+        else
+        {
+	        //-clear out context menu, and add additional functionaliity
+	        copyLinkItem = new ContextMenuItem("Copy link to clipboard",true,true,true);
+	        copyLinkItem.addEventListener(ContextMenuEvent.MENU_ITEM_SELECT,_copyLinkClicked);
+          var copyToAccountItem:ContextMenuItem = new ContextMenuItem("Copy files to account",false,true,true);
+          copyToAccountItem.addEventListener(ContextMenuEvent.MENU_ITEM_SELECT,_copyToAccountClicked);
+	        launchPlayerItem = new ContextMenuItem("Launch file in Bloop Player",false,true,true);
+	        launchPlayerItem.addEventListener(ContextMenuEvent.MENU_ITEM_SELECT,_launchBloopPlayerClicked);
+	
+	        this._contextMenu = new ContextMenu();
+	        this._contextMenu.hideBuiltInItems();
+	        this._contextMenu.customItems = [copyLinkItem,launchPlayerItem,copyToAccountItem];
+	        this.cmpBloopExplorerContent.contentGrid.contextMenu = this._contextMenu;
+	        this._contextMenu.addEventListener(ContextMenuEvent.MENU_SELECT,_contextMenuOpen);
+        }
+      }
+      
+    ]]>
+  </mx:Script>
+  
+  <mx:states>
+    <mx:State name="Details">
+      <mx:AddChild relativeTo="{dvdVertical}" position="lastChild">
+        <mx:Panel width="100%" height="50%" layout="absolute" id="pnlDetails" title="Details..." styleName="panelFrames">
+          <mb:bloopExplorerDetails x="0" y="0" width="100%" height="100%" id="cmpBloopExplorerDetails">
+          </mb:bloopExplorerDetails>
+        </mx:Panel>
+      </mx:AddChild>
+      <mx:SetProperty target="{pnlContent}" name="height" value="50%"/>
+    </mx:State>
+  </mx:states>
+  
+  <mx:Canvas x="0" y="0" width="100%" height="100%" id="cnvBloopExplorer" label="Bloop Explorer" styleName="canvas">
+    <mx:MenuBar x="0" y="0" width="100%" height="35" id="mnbMenu" labelField="@label" dataProvider="{this._menuBarCollection}" itemClick="_menuBarClick(event)" styleName="menuBar"></mx:MenuBar>
+    <mx:HDividedBox x="0" y="35" width="100%" height="100%" id="dvdHorizontal" horizontalGap="6" liveDragging="true" borderStyle="none">
+    <mx:Panel x="10" y="10" width="200" height="100%" layout="absolute" id="pnlNavigation" styleName="panelFrames" title="User Name Here">
+      <mb:bloopExplorerTree x="0"
+                            y="0"
+                            width="100%"
+                            height="100%"
+                            id="cmpBloopExplorerTree"
+                            directorySelected="this._treeDirectorySelected();"
+                            itemDropped="this._moveItems();"
+                            reloadComplete="this._reloadComplete();"/>
+    </mx:Panel>
+      <mx:VDividedBox x="0" y="70" width="100%" height="100%" id="dvdVertical" liveDragging="true" borderStyle="none" verticalGap="6">
+        <mx:Panel width="100%" height="100%" layout="absolute" title="Path Here" id="pnlContent" styleName="panelFrames">
+          <mb:bloopExplorerContent x="0"
+                                   y="0"
+                                   width="100%"
+                                   height="100%"
+                                   id="cmpBloopExplorerContent"
+                                   directoryDoubleClicked="this._contentDirectoryLaunched()"
+                                   fileDoubleClicked="this._fileLaunched()"
+                                   selectedRowChanged="this._rowSelected()"
+                                   itemDropped="this._moveItems();"/>
+        </mx:Panel>
+      </mx:VDividedBox>
+    </mx:HDividedBox>
+  </mx:Canvas>
+  <mx:HTTPService id="adminRequest" useProxy="false" method="POST" resultFormat="text" result="_loadResponse(event)" fault="_handleError(event)" />
+  <mx:Text id="newNameHolder" text="" visible="false"/>
+  <mx:Text id="newItemTypeHolder" text="" visible="false"/>
+</mx:Application>

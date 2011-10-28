@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+
+<mx:TitleWindow xmlns:mx="http://www.adobe.com/2006/mxml"
+				title="Processing request"
+				x="300"
+				y="200"
+				styleName="panelFrames">
+	<mx:Label text="Please wait one moment" styleName="detailsLabel"/>
+</mx:TitleWindow>  

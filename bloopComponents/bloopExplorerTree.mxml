@@ -1,0 +1,456 @@
+<?xml version="1.0" encoding="utf-8"?>
+<mx:Canvas xmlns:mx="http://www.adobe.com/2006/mxml" styleName="canvas">
+  <mx:Metadata>
+    [Event(name="directorySelected",type="flash.events.Event")]
+    [Event(name="itemDropped",type="flash.events.Event")]
+    [Event(name="reloadComplete",type="flash.events.Event")]
+  </mx:Metadata>
+  <mx:Script>
+    <![CDATA[
+      import mx.controls.listClasses.IListItemRenderer;
+      import com.adobe.serialization.json.JSON;
+      import mx.collections.XMLListCollection;
+      import mx.containers.Box;
+      import mx.controls.Alert;
+      import mx.controls.treeClasses.*;
+      import mx.core.UIComponent;
+      import mx.events.*;
+      import mx.managers.DragManager;
+      import mx.rpc.events.*;
+      import scripts.extensions.bloopExplorerTreeRenderer;
+      
+      [Bindable] private var _treeXML:XML;
+      [Bindable] private var _treeData:XMLListCollection;
+      
+      private var _DATA_URL:String;
+      private var _USER_ID:int;
+      private var _droppedDirectoryID:int = -1;
+      private var _loadQueue:Array = new Array;
+      private var _reloadInProgress:Boolean = false;
+      
+      public var customDropEnabled:Boolean = false;
+      
+      ///////////////////////////////////////////////////////////////////////////////////////////
+      ///////////////////////////////////////////////////////////////////////////////////////////
+      //-private functions
+      
+      /**
+       * function called for http request to mybloop to get directory information
+       */
+      private function _getData(directoryID:Number):void
+      {
+        this.directoryRequest.url = this._DATA_URL;
+        this.directoryRequest.send({did:directoryID,uid:this._USER_ID});
+      }
+      
+      /**
+       * function called when http response is received. builds subdirectory tree for the loaded directory
+       */
+      private function _loadData(e:ResultEvent):void
+      {
+        var rawData:String = String(e.result);
+        var data:Object = JSON.decode(rawData);
+        
+        var parentDirectory:XML = this.getDirectoryByID(data.parent);
+        
+        if (data.directories.length > 0)
+        {
+          if (parentDirectory)
+          {
+            for (var i:int = 0; i < data.directories.length; i++)
+            {
+              var childDirectory:XML = this.createDirectory({id:data.directories[i].directoryID,
+                                                             name:data.directories[i].directoryName,
+                                                             hidden:data.directories[i].hidden,
+                                                             children:data.directories[i].subCount,
+                                                             loaded:(data.directories[i].subCount <= 0)});
+                
+              this.appendToParent(childDirectory,parentDirectory);
+            }
+          }
+        }
+        
+  	    parentDirectory.@subdirectories = data.directories.length;
+  	    parentDirectory.@loaded = true;
+  	    
+        this.expandToDirectory(parentDirectory.@id);
+        
+        if (this._reloadInProgress)
+        {
+	        if (this._loadQueue.length > 0)
+	        {
+	        	this._getData(this._loadQueue.pop());
+	        }
+	        else
+	        {
+	        	this._reloadInProgress = false;
+	        	this.setSelectedDirectory(parentDirectory);
+	        	
+            //-fire event
+            var bloopTreeEvent:Event = new Event("reloadComplete");
+            dispatchEvent(bloopTreeEvent);
+	        }
+        }
+        else
+        {
+          this.setSelectedDirectory(parentDirectory);          
+        }
+        
+        //setTimeout(this.directoryTree.validateNow,100);
+      }
+      
+      /**
+       * function called when http request fails
+       */
+      private function _handleError(e:FaultEvent):void
+      {
+        Alert.show(e.fault.message, "Error loading files. Please try again later...");
+      }
+      
+      //-event functions
+      /**
+       * function that fires custom event whenever the current selected directory changes
+       */
+      private function _fireDirectorySelectedEvent():void
+      {
+        var bloopTreeEvent:Event = new Event("directorySelected");
+        dispatchEvent(bloopTreeEvent);
+      }
+      
+      /**
+       * handler function called the CHANGE event in the tree component. CHANGE event is fired when user clicks
+       * the name of a tree node
+       */
+      private function _directoryClicked():void
+      {
+        var selectedDirectory:XML = XML(this.directoryTree.selectedItem);
+        
+        if (selectedDirectory.@loaded == false)
+        {
+          this._getData(selectedDirectory.@id);
+        }
+        else
+        {
+          this._expandDirectory(selectedDirectory);
+          //setTimeout(this.directoryTree.validateNow,100);
+        }
+        this._fireDirectorySelectedEvent();
+      }
+
+      /**
+       * handler function called the ITEMOPENING and ITEMCLOSE event in the tree component. these two events are fired when
+       * user clicks on the disclosure icon
+       */      
+      private function _disclosureClicked(e:TreeEvent,expanding:Boolean):void
+      {
+        var directory:XML = XMLList(TreeListData(TreeItemRenderer(e.itemRenderer).listData).item)[0];
+        
+        if (expanding)
+        {
+          //-folder was expanded, load its subscontents
+          if (directory.@loaded == false)
+          {
+            this._getData(directory.@id);
+          }
+        }
+        else
+        {
+          //-if a folder was closed, must make it the currently selected folder if one of its children was the selected folder
+          var selectedDirectory:XML = this.getSelectedDirectory();
+          var tmp:XMLList = directory..directory.(@id == selectedDirectory.@id);
+          
+          if (tmp.length() > 0)
+          {
+            //-closed directory was an ancestor of selected directory, update selected directory to be the closed directory
+            this.directoryTree.selectedItem = directory;
+            this._fireDirectorySelectedEvent();
+          }
+          else
+          {
+            //-when the currently selected directory's parent is closed, flex automatically changes the selected directory value...this is written to account for this gayness
+            if ((directory.@id != selectedDirectory.@id) && (selectedDirectory.@id <= 0))
+            {
+              this.directoryTree.selectedItem = directory;
+              this._fireDirectorySelectedEvent();
+            }
+          }
+        }
+      }
+      
+      private function _dragEnter(e:DragEvent):void
+      {
+        this._droppedDirectoryID = -1;
+        
+        if (this.customDropEnabled)
+        {
+          DragManager.acceptDragDrop(UIComponent(e.currentTarget));
+        }
+      }
+      
+      private function _dragOver(e:DragEvent):void
+      {
+        if (this.customDropEnabled)
+        {
+          var dropIndex:int = this.directoryTree.calculateDropIndex(e);
+          var itemRenderer:TreeItemRenderer = this.directoryTree.indexToItemRenderer(dropIndex) as TreeItemRenderer;
+          
+          if (itemRenderer)
+          {
+            DragManager.showFeedback(DragManager.COPY);
+            itemRenderer.drawFocus(true);
+          }
+          else
+          {
+            itemRenderer = this.directoryTree.indexToItemRenderer(this._treeData.length) as TreeItemRenderer;
+            itemRenderer.drawFocus(false);
+            DragManager.showFeedback(DragManager.NONE);
+          }
+        }
+      }
+      
+      private function _dragExit(e:DragEvent):void
+      {
+        if (this.customDropEnabled)
+        {
+          var itemRenderer:TreeItemRenderer = this.directoryTree.indexToItemRenderer(this._treeData.length) as TreeItemRenderer;
+          
+          if (itemRenderer)
+          {
+            itemRenderer.drawFocus(false);
+          }
+        }
+      }
+      
+      private function _dragDrop(e:DragEvent):void
+      {
+        if (this.customDropEnabled)
+        {
+          var dropIndex:int = this.directoryTree.calculateDropIndex(e);
+          var itemRenderer:TreeItemRenderer = this.directoryTree.indexToItemRenderer(dropIndex) as TreeItemRenderer;
+          
+          if (itemRenderer)
+          {
+            this._droppedDirectoryID = this._getDirectoryIDByIndex(dropIndex);;
+            itemRenderer.drawFocus(false);
+            
+            //-fire event
+            var bloopTreeEvent:Event = new Event("itemDropped");
+            dispatchEvent(bloopTreeEvent);
+          }
+        }
+      }
+      
+      //-tree functiosn
+      /**
+       * function just expands the given directory in the tree
+       */
+      private function _expandDirectory(directory:XML):void
+      {
+      	var output:Boolean = this.directoryTree.isItemOpen(directory);
+        if (!this.directoryTree.isItemOpen(directory))
+        {
+          if (directory.@loaded == 'true')
+          {
+            this.directoryTree.expandItem(directory,true,false);
+          }
+          else
+          {
+            this._getData(directory.@id);
+          }
+        }
+      }
+      
+      private function _getDirectoryIDByIndex(index:int):int
+      {
+        var xmlString:String = this._treeData.toString();
+        var result:Array = xmlString.split('<directory id="');  //-split xml string by '<directory id="'
+        
+        //-the string section containing the id is in the index+1 element
+        xmlString = String(result[index+1]);
+        var directoryID:Number = Number(xmlString.substring(0,xmlString.search('"'))); 
+        
+        return directoryID;
+      }
+      
+      ///////////////////////////////////////////////////////////////////////////////////////////
+      ///////////////////////////////////////////////////////////////////////////////////////////
+      //-public functions
+      
+      public function initializeTree(userID:int,dataURL:String):void
+      {
+        this._DATA_URL = dataURL;
+        this._USER_ID = userID;
+        
+        //this.reloadCurrentPath();
+        this._treeXML = <xml></xml>;
+        
+        var rootDirectory:XML = this.createDirectory({id:0,name:'Home',hidden:0,children:1,loaded:false});
+        this.appendToParent(rootDirectory,this._treeXML);
+        this._treeData = new XMLListCollection(this._treeXML.directory);
+        
+        //this.directoryTree.selectedItem = rootDirectory;        
+        //this._directoryClicked();
+      }
+      
+      public function reloadTreePath():void
+      {
+      	var rootDirectory:XML = this.createDirectory({id:0,name:'Home',hidden:0,children:1,loaded:false});
+      	var selectedDirectory:XML = this.getSelectedDirectory();
+      	
+      	this._reloadInProgress = true;
+      	this._loadQueue = this.getPath(selectedDirectory.@id,true).reverse();
+      	
+        this._treeXML = <xml></xml>;
+        this.appendToParent(rootDirectory,this._treeXML);
+        this._treeData = new XMLListCollection(this._treeXML.directory);
+        
+        this._getData(this._loadQueue.pop());
+      }
+      
+      public function loadPath(aDirectoryIDs:Array):void
+      {
+        var rootDirectory:XML = this.createDirectory({id:0,name:'Home',hidden:0,children:1,loaded:false});
+        this._loadQueue = aDirectoryIDs.reverse();
+        this._reloadInProgress = true;
+        
+        this._treeXML = <xml></xml>;
+        this.appendToParent(rootDirectory,this._treeXML);
+        this._treeData = new XMLListCollection(this._treeXML.directory);
+        
+        this._getData(this._loadQueue.pop());
+      }
+      
+      /**
+       * creates a new xml directory with the given parameters:
+       * params.id - directory ID
+       * params.name - directory Name
+       * params.children - number of subdirectories in given directory (this value can change)
+       * params.hidden - directory is private or not
+       */
+      public function createDirectory(params:Object):XML
+      {
+        var directory:XML = <directory/>;
+        directory.@id = params.id;
+        directory.@name = params.name;
+        directory.@subdirectories = params.children;
+        directory.@loaded = params.loaded;
+        directory.@hidden = params.hidden;
+        
+        return directory;
+      }
+      
+      /**
+       * function called to add a child directory to the given parent directory
+       */
+      public function appendToParent(childDirectory:XML,parentDirectory:XML):void
+      {
+        parentDirectory.appendChild(childDirectory);
+      }
+
+      /**
+       * given directory id, this function will expand down to that directory (assumes its path directories are already loaded)
+       */
+      public function expandToDirectory(directoryID:int):void
+      {
+      	var path:Array = this.getPath(directoryID,true);
+        var currentDirectory:XML;
+        
+        for (var i:String in path)
+        {
+          currentDirectory = this.getDirectoryByID(path[i]);
+          
+          if (currentDirectory)
+            this._expandDirectory(currentDirectory);
+        }
+      }
+      
+      /**
+       * returns true if given directory has subdirectories, false otherwise
+       */
+      public function hasSubDirectories(node:XML):Boolean
+      {
+        return (node.directory.length() > 0);
+      }
+      
+      /**
+       * returns the currently selected directory
+       */
+      public function getSelectedDirectory():XML
+      {
+        return XML(this.directoryTree.selectedItem);
+      }
+      
+      /**
+       * sets the selected directory to the given directory
+       */
+      public function setSelectedDirectory(directory:XML):void
+      {
+        this.directoryTree.selectedItem = directory;
+      }
+      
+      /**
+       * given directory id, this function returns the directory in the xml data structure
+       */
+      public function getDirectoryByID(directoryID:Number):XML
+      {
+        var directoryList:XMLList = this._treeXML..directory.(@id == directoryID);
+        
+        if (directoryList[0] != undefined)
+          return directoryList[0];
+        else
+          return null;
+      }
+      
+      /**
+       * returns the name path to the given directory ID in an array starting from the root. if returnIDPath is true,
+       * this function will return the id path instead.
+       */
+      public function getPath(directoryID:Number,returnIDPath:Boolean=false):Array
+      {
+        var directory:XML = this.getDirectoryByID(directoryID);
+        var path:Array = (returnIDPath) ? new Array(directory.@id) : new Array(directory.@name);
+        
+        while (directory = directory.parent())
+        {
+          if (returnIDPath)
+            path.push(directory.@id);
+          else
+            path.push(directory.@name);
+        }
+        path.pop();	//-last insert is an empty node (the base xml tag)
+        
+        return path.reverse();
+      }
+      
+      public function getDroppedDirectory():XML
+      {
+        if (this._droppedDirectoryID >= 0)
+        {
+          return this.getDirectoryByID(this._droppedDirectoryID);
+        }
+        else
+          return null;
+      }
+    ]]>
+  </mx:Script>
+  <mx:Tree id="directoryTree"
+           dataProvider="{this._treeData}"
+           itemRenderer="scripts.extensions.bloopExplorerTreeRenderer"
+           labelField="@name"
+           change="_directoryClicked()"
+           itemOpening="_disclosureClicked(event,true)"
+           itemClose="_disclosureClicked(event,false)"
+           dragEnter="_dragEnter(event)"
+           dragExit="_dragExit(event)"
+           dragOver="_dragOver(event)"
+           dragDrop="_dragDrop(event)"
+           styleName="directoryTree"
+           defaultLeafIcon="@Embed('/images/folder.gif')"
+           folderClosedIcon="@Embed('/images/folder.gif')"
+           folderOpenIcon="@Embed('/images/folder.gif')"
+           openDuration="0"
+           width="100%"
+           height="100%">
+  </mx:Tree>
+  <mx:HTTPService id="directoryRequest" useProxy="false" concurrency="last" method="POST" resultFormat="text" result="_loadData(event)" fault="_handleError(event)" />
+</mx:Canvas>

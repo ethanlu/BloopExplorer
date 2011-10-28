@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- bloopExporer create item component -->
+
+<mx:TitleWindow xmlns:mx="http://www.adobe.com/2006/mxml"
+				title="Create Item"
+				x="300"
+				y="200"
+			    styleName="panelFrames"
+				creationComplete="this.nameInput.setFocus();">
+
+  <mx:Metadata>
+    [Event(name="newNameEntered",type="flash.events.Event")]
+  </mx:Metadata>
+
+	<mx:Script>
+		<![CDATA[
+			import mx.controls.Text;
+	    import mx.managers.PopUpManager;
+	   
+	    // A reference to the TextInput control in which to put the result.
+	    [Bindable] public var newName:Text;
+	   
+	    // Event handler for the OK button.
+	    private function newNameEntered():void
+	    {
+	    	var bloopCreateEvent:Event = new Event("newNameEntered");
+        newName.text = nameInput.text;
+        
+        dispatchEvent(bloopCreateEvent);
+        PopUpManager.removePopUp(this);
+	    }
+		]]>
+	</mx:Script>
+	
+	<mx:VBox>
+	    <mx:Label text="Enter the name below. Only letters, numbers, and certain keyboard characters will be allowed." styleName="detailsText"/>
+	    <mx:TextInput id="nameInput"  width="100%" styleName="detailsText"/>
+	</mx:VBox>
+	<mx:HBox>
+    <mx:Button label="OK" click="newNameEntered();"/>
+    <mx:Button label="Cancel" click="PopUpManager.removePopUp(this);"/>
+	</mx:HBox>
+
+</mx:TitleWindow>  

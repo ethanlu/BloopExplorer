@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- bloopExporer rename item component -->
+
+<mx:TitleWindow xmlns:mx="http://www.adobe.com/2006/mxml"
+				title="Rename Item"
+				x="300"
+				y="200"
+				styleName="panelFrames"
+				creationComplete="this.nameInput.setFocus();">
+
+  <mx:Metadata>
+    [Event(name="newNameEntered",type="flash.events.Event")]
+  </mx:Metadata>
+
+	<mx:Script>
+		<![CDATA[
+			import mx.controls.Text;
+	    import mx.managers.PopUpManager;
+	   
+	    // A reference to the TextInput control in which to put the result.
+	    [Bindable] public var newName:Text;
+	    [Bindable] public var item:Object;
+	   
+	    // Event handler for the OK button.
+	    private function newNameEntered():void
+	    {
+	    	var bloopRenameEvent:Event = new Event("newNameEntered");
+        newName.text = nameInput.text;
+        
+        dispatchEvent(bloopRenameEvent);
+        PopUpManager.removePopUp(this);
+	    }
+		]]>
+	</mx:Script>
+	
+	<mx:VBox>
+		<mx:HBox>
+		    <mx:Label text="Type : " styleName="detailsLabel"/>
+		    <mx:Label text="{(this.item.isFolder ? 'Folder' : 'File')}" styleName="detailsLabel"/>
+		</mx:HBox>
+		<mx:HBox>
+		    <mx:Label text="Current Name : " fontWeight="bold" styleName="detailsLabel"/>
+		    <mx:Label text="{this.item.name}" styleName="detailsText"/>
+		</mx:HBox>
+		<mx:HBox>
+		    <mx:Label text="New Name : " styleName="detailsLabel"/>
+		    <mx:TextInput id="nameInput" width="100%" styleName="detailsText"/>
+		</mx:HBox>
+	</mx:VBox>
+	<mx:HBox>
+	    <mx:Button color="#000000" label="OK" click="newNameEntered();"/>
+	    <mx:Button color="#000000" label="Cancel" click="PopUpManager.removePopUp(this);"/>
+	</mx:HBox>
+
+</mx:TitleWindow>  

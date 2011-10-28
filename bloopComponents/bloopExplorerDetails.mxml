@@ -1,0 +1,118 @@
+<?xml version="1.0" encoding="utf-8"?>
+<mx:Canvas xmlns:mx="http://www.adobe.com/2006/mxml"
+	       width="100%"
+	       height="200"
+	       styleName="canvas">
+  <mx:Script>
+    <![CDATA[
+      import com.adobe.serialization.json.JSON;
+      import mx.controls.Alert;
+      import mx.rpc.events.FaultEvent;
+      import mx.rpc.events.ResultEvent;
+      
+      private var _DATA_URL:String;
+      private var _USER_ID:int;
+      
+      private function _getData(ID:Number,requestType:String):void
+      {
+        this.detailsRequest.url = this._DATA_URL;
+        this.detailsRequest.send({id:ID,uid:this._USER_ID,type:requestType});
+      }
+        
+      private function _loadData(e:ResultEvent):void
+      {
+        var rawData:String = String(e.result);
+        var data:Object = JSON.decode(rawData);
+        var attributes:Array = new Array();
+        
+        switch (data.type)
+        {
+          case 'File':
+            this.txtName.text = data.name;
+            this.txtType.text = data.extension + ' File';
+            this.txtSize.text = data.size;
+            this.txtDescription.text = data.description;
+            this.txtCreated.text = data.createdate;
+            this.txtViews.text = data.views;
+            this.txtComments.text = data.comments;
+            
+            if (data.copied == 1)
+              attributes.push("Copied");
+            else
+              attributes.push("Original");
+              
+            if (data.hidden == 1)
+              attributes.push("Hidden");
+            else
+              attributes.push("Public");
+              
+            this.txtAttributes.text = attributes.join(",");
+            break;
+          case 'Folder':
+            this.txtName.text = data.name;
+            this.txtType.text = 'Folder';
+            this.txtSize.text = data.size;
+            this.txtDescription.text = 'Not Available';
+            this.txtCreated.text = data.createdate;
+            this.txtViews.text = 'Not Available';
+            this.txtComments.text = 'Not Available';
+            
+            if (data.hidden == 1)
+              attributes.push("Hidden");
+            else
+              attributes.push("Public");
+              
+            this.txtAttributes.text = attributes.join(",");
+            break;
+          default:
+            break;
+        }
+      }
+      
+      private function _handleError(e:FaultEvent):void
+      {
+       Alert.show(e.fault.message, "Error loading details. Please try again later...");
+      }
+      
+      ///////////////////////////////////////////////////////////////////////////////////////////
+      ///////////////////////////////////////////////////////////////////////////////////////////
+      //-public functions
+      
+      public function initializeDetails(userID:int,dataURL:String):void
+      {
+        this._USER_ID = userID;
+        this._DATA_URL = dataURL;
+      }
+      
+      public function getDirectoryDetails(directoryID:Number):void
+      {
+        this._getData(directoryID,'directory');
+      }
+      
+      public function getfileDetails(fileID:Number):void
+      {
+        this._getData(fileID,'file');
+      }
+        
+    ]]>
+  </mx:Script>
+  <mx:Label x="10" y="10" text="Name : " id="lblName" styleName="detailsLabel"/>
+  <mx:Text y="10" text="Not Available" id="txtName" left="98" width="480" styleName="detailsText"/>
+  <mx:Label x="10" y="90" text="Type : " id="lblType" styleName="detailsLabel"/>
+  <mx:Text y="90" id="txtType" text="Not Available" left="98" width="251.5" styleName="detailsText"/>
+  <mx:Label x="10" y="116" text="Size : " id="lblSize" styleName="detailsLabel"/>
+  <mx:Text y="116" text="Not Available" id="txtSize" left="98" width="251.5" styleName="detailsText"/>
+  <mx:Label x="10" y="36" text="Description : " id="lblDescription" styleName="detailsLabel"/>
+  <mx:Text y="36" text="Not Available" id="txtDescription" left="98" width="480" styleName="detailsText"/>
+  <mx:Label x="10" y="142" text="Created : " id="lblCreated" styleName="detailsLabel"/>
+  <mx:Text y="142" text="Not Available" id="txtCreated" left="98" width="251.5" styleName="detailsText"/>
+  <mx:Label x="357.5" y="91" text="Views : " id="lbl" styleName="detailsLabel"/>
+  <mx:Label x="357.5" y="118" text="Comments" id="lblComments" styleName="detailsLabel"/>
+  <mx:Text y="91" text="Not Available" id="txtViews" left="445.5" width="132.5" styleName="detailsText"/>
+  <mx:Text y="118" text="Not Available" id="txtComments" left="445.5" width="132.5" styleName="detailsText"/>
+  <mx:Label x="357.5" y="142" text="Attributes : " id="lblAttributes" styleName="detailsLabel"/>
+  <mx:Text y="142" text="Not Available" left="445.5" id="txtAttributes" width="132.5" styleName="detailsText"/>
+  <mx:Label x="10" y="63" text="Tags :" id="lblTags" styleName="detailsLabel"/>
+  <mx:Text x="98" y="64" text="Not Available" width="480" id="txtTags" styleName="detailsText"/>
+  <mx:HTTPService id="detailsRequest" useProxy="false" method="POST" resultFormat="text" result="_loadData(event)" fault="_handleError(event)" />
+</mx:Canvas>
